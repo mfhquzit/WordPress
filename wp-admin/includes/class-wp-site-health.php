@@ -150,9 +150,9 @@ class WP_Site_Health {
 				if ( is_string( $test['test'] ) ) {
 					$health_check_js_variables['site_status']['async'][] = array(
 						'test'      => $test['test'],
-						'has_rest'  => ( isset( $test['has_rest'] ) ? $test['has_rest'] : false ),
+						'has_rest'  => $test['has_rest'] ?? false,
 						'completed' => false,
-						'headers'   => isset( $test['headers'] ) ? $test['headers'] : array(),
+						'headers'   => $test['headers'] ?? array(),
 					);
 				}
 			}
@@ -965,6 +965,7 @@ class WP_Site_Health {
 				'function' => 'mysqli_connect',
 				'required' => false,
 			),
+			// Sodium was introduced in PHP 7.2, but the extension may not be enabled.
 			'libsodium' => array(
 				'constant'            => 'SODIUM_LIBRARY_VERSION',
 				'required'            => false,
@@ -1052,10 +1053,10 @@ class WP_Site_Health {
 		$failures = array();
 
 		foreach ( $modules as $library => $module ) {
-			$extension_name = ( isset( $module['extension'] ) ? $module['extension'] : null );
-			$function_name  = ( isset( $module['function'] ) ? $module['function'] : null );
-			$constant_name  = ( isset( $module['constant'] ) ? $module['constant'] : null );
-			$class_name     = ( isset( $module['class'] ) ? $module['class'] : null );
+			$extension_name = $module['extension'] ?? null;
+			$function_name  = $module['function'] ?? null;
+			$constant_name  = $module['constant'] ?? null;
+			$class_name     = $module['class'] ?? null;
 
 			// If this module is a fallback for another function, check if that other function passed.
 			if ( isset( $module['fallback_for'] ) ) {
@@ -1876,6 +1877,42 @@ class WP_Site_Health {
 				size_format( 100 * MB_IN_BYTES )
 			);
 			$result['status'] = 'recommended';
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Tests if registration is open to everyone and the default role is privileged.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @return array The test results.
+	 */
+	public function get_test_insecure_registration() {
+		$users_can_register = get_option( 'users_can_register' );
+		$default_role       = get_option( 'default_role' );
+
+		$result = array(
+			'label'       => __( 'Open Registration with privileged default role' ),
+			'status'      => 'good',
+			'badge'       => array(
+				'label' => __( 'Security' ),
+				'color' => 'blue',
+			),
+			'description' => '<p>' . __( 'The combination of open registration setting and the default user role may lead to security issues.' ) . '</p>',
+			'actions'     => '',
+			'test'        => 'insecure_registration',
+		);
+
+		if ( $users_can_register && in_array( $default_role, array( 'editor', 'administrator' ), true ) ) {
+			$result['description'] = __( 'Registration is open to anyone, and the default role is set to a privileged role.' );
+			$result['status']      = 'critical';
+			$result['actions']     = sprintf(
+				'<p><a href="%s">%s</a></p>',
+				esc_url( admin_url( 'options-general.php' ) ),
+				__( 'Change these settings' )
+			);
 		}
 
 		return $result;
@@ -2755,6 +2792,52 @@ class WP_Site_Health {
 	}
 
 	/**
+	 * Tests if opcode cache is enabled and available.
+	 *
+	 * @since 7.0.0
+	 *
+	 * @return array<string, string|array<string, string>> The test result.
+	 */
+	public function get_test_opcode_cache(): array {
+		$opcode_cache_enabled = false;
+		if ( function_exists( 'opcache_get_status' ) ) {
+			$status = @opcache_get_status( false ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Warning emitted in failure case.
+			if ( $status && true === $status['opcache_enabled'] ) {
+				$opcode_cache_enabled = true;
+			}
+		}
+
+		$result = array(
+			'label'       => __( 'Opcode cache is enabled' ),
+			'status'      => 'good',
+			'badge'       => array(
+				'label' => __( 'Performance' ),
+				'color' => 'blue',
+			),
+			'description' => sprintf(
+				'<p>%s</p>',
+				__( 'Opcode cache improves PHP performance by storing precompiled script bytecode in memory, reducing the need for PHP to load and parse scripts on each request.' )
+			),
+			'actions'     => sprintf(
+				'<p><a href="%s" target="_blank">%s<span class="screen-reader-text"> %s</span><span aria-hidden="true" class="dashicons dashicons-external"></span></a></p>',
+				esc_url( 'https://www.php.net/manual/en/book.opcache.php' ),
+				__( 'Learn more about OPcache.' ),
+				/* translators: Hidden accessibility text. */
+				__( '(opens in a new tab)' )
+			),
+			'test'        => 'opcode_cache',
+		);
+
+		if ( ! $opcode_cache_enabled ) {
+			$result['status']       = 'recommended';
+			$result['label']        = __( 'Opcode cache is not enabled' );
+			$result['description'] .= '<p>' . __( 'Enabling this cache can significantly improve the performance of your site.' ) . '</p>';
+		}
+
+		return $result;
+	}
+
+	/**
 	 * Returns a set of tests that belong to the site status page.
 	 *
 	 * Each site status test is defined here, they may be `direct` tests, that run on page load, or `async` tests
@@ -2842,9 +2925,17 @@ class WP_Site_Health {
 					'label' => __( 'Autoloaded options' ),
 					'test'  => 'autoloaded_options',
 				),
+				'insecure_registration'        => array(
+					'label' => __( 'Open Registration with privileged default role' ),
+					'test'  => 'insecure_registration',
+				),
 				'search_engine_visibility'     => array(
 					'label' => __( 'Search Engine Visibility' ),
 					'test'  => 'search_engine_visibility',
+				),
+				'opcode_cache'                 => array(
+					'label' => __( 'Opcode cache' ),
+					'test'  => 'opcode_cache',
 				),
 			),
 			'async'  => array(
@@ -3023,7 +3114,7 @@ class WP_Site_Health {
 						'sig'      => $sig,
 						'args'     => $data['args'],
 						'schedule' => $data['schedule'],
-						'interval' => isset( $data['interval'] ) ? $data['interval'] : null,
+						'interval' => $data['interval'] ?? null,
 					);
 
 				}
@@ -3414,14 +3505,14 @@ class WP_Site_Health {
 			'x-srcache-fetch-status' => $cache_hit_callback,
 
 			// Generic caching proxies (Nginx, Varnish, etc.)
-			'x-cache'           => $cache_hit_callback,
-			'x-cache-status'    => $cache_hit_callback,
-			'x-litespeed-cache' => $cache_hit_callback,
-			'x-proxy-cache'     => $cache_hit_callback,
-			'via'               => '',
+			'x-cache'                => $cache_hit_callback,
+			'x-cache-status'         => $cache_hit_callback,
+			'x-litespeed-cache'      => $cache_hit_callback,
+			'x-proxy-cache'          => $cache_hit_callback,
+			'via'                    => '',
 
 			// Cloudflare
-			'cf-cache-status' => $cache_hit_callback,
+			'cf-cache-status'        => $cache_hit_callback,
 		);
 
 		/**
